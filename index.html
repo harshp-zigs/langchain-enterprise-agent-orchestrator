@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Evaluating Latency, Token Costs, and Hallucinations in Production With LangSmith</title>
+  <meta name="description" content="A practical guide to measuring what matters in production LLM apps: latency, token cost, and hallucinations, using LangSmith tracing, datasets, and evaluators.">
+  <meta name="keywords" content="LangSmith, LLM evaluation, LLM observability, token cost, latency, hallucination detection, LangChain, production LLM">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://harshp-zigs.github.io/langchain-enterprise-agent-orchestrator/">
+
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Evaluating Latency, Token Costs, and Hallucinations in Production With LangSmith">
+  <meta property="og:description" content="How to trace, measure, and gate quality, speed, and spend in production LLM applications.">
+  <meta property="og:image" content="https://harshp-zigs.github.io/langchain-enterprise-agent-orchestrator/langchain-langsmith-production-pipeline.jpg">
+  <meta property="og:url" content="https://harshp-zigs.github.io/langchain-enterprise-agent-orchestrator/">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <span class="pulse" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <p class="site-label">LLM Observability Notes</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <article>
+      <h1>Evaluating Latency, Token Costs, and Hallucinations in Production With LangSmith</h1>
+
+      <figure class="hero">
+        <img src="langchain-langsmith-production-pipeline.jpg" alt="LangChain and LangSmith production pipeline measuring latency, token cost, and hallucinations" width="1200" height="630">
+      </figure>
+
+      <p class="lead">
+        A demo has one user and one happy path. Production has thousands of users, messy inputs, slow days, and a monthly bill. The question changes from "does it work?" to "how fast, how expensive, and how often is it wrong?" Teams that cannot answer those three questions with numbers are running on hope.
+      </p>
+
+      <div class="stats" aria-label="Example metrics dashboard">
+        <div class="stat"><span class="k">Latency</span><span class="v">p95</span><span class="d">Slowest typical user experience</span></div>
+        <div class="stat"><span class="k">Cost</span><span class="v">per task</span><span class="d">Tokens in and out, priced</span></div>
+        <div class="stat"><span class="k">Accuracy</span><span class="v">grounded %</span><span class="d">Answers supported by sources</span></div>
+        <div class="stat"><span class="k">Safety net</span><span class="v">refusals</span><span class="d">"I do not know" when evidence is missing</span></div>
+      </div>
+
+      <nav class="toc" aria-label="Table of contents">
+        <h2>Contents</h2>
+        <ol>
+          <li><a href="#why">Why Production Needs Measurement</a></li>
+          <li><a href="#metrics">The Metrics That Matter</a></li>
+          <li><a href="#tracing">Tracing Every Step</a></li>
+          <li><a href="#datasets">Datasets and Offline Evals</a></li>
+          <li><a href="#online">Online Evaluation</a></li>
+          <li><a href="#alerts">Alerts and Budgets</a></li>
+          <li><a href="#workflow">A Debugging Workflow</a></li>
+          <li><a href="#faqs">FAQs</a></li>
+        </ol>
+      </nav>
+
+      <section id="why">
+        <h2>Why Production Needs Measurement</h2>
+        <p>
+          LLM applications fail quietly. A slower retriever, a longer prompt, or a model update can raise cost or lower quality without a single error being thrown. Without traces and scores, you learn about it from a user complaint or a surprise invoice.
+        </p>
+        <p>
+          Teams that want <a href="https://zignuts.com/ai-services/ai-integration/langchain-integration-services?utm_source=seo_web2.0&amp;utm_medium=backlink&amp;utm_campaign=seo_referral&amp;utm_id=11" target="_blank" rel="noopener">production-ready LLM orchestration solutions</a> treat measurement as part of the architecture, not an afterthought. Every step is traced, every change is scored, and every release has to pass a quality gate first.
+        </p>
+      </section>
+
+      <section id="metrics">
+        <h2>The Metrics That Matter</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th scope="col">Area</th><th scope="col">Measure</th><th scope="col">Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">Latency</th><td>End-to-end time, time to first token, p50, p95, p99</td><td>Averages hide the slow requests users remember</td></tr>
+              <tr><th scope="row">Latency by step</th><td>Retrieval, reranking, model call, tool calls</td><td>Shows which step to fix first</td></tr>
+              <tr><th scope="row">Token cost</th><td>Input tokens, output tokens, cost per task and per user</td><td>Cost scales with usage and prompt size</td></tr>
+              <tr><th scope="row">Hallucination</th><td>Groundedness, citation correctness, unsupported claim rate</td><td>Wrong answers erode trust fastest</td></tr>
+              <tr><th scope="row">Abstention</th><td>Rate of correct "I do not know" answers</td><td>Declining beats inventing</td></tr>
+              <tr><th scope="row">Errors and retries</th><td>Failures, timeouts, rate limits, retry counts</td><td>Hidden retries inflate cost and delay</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Track the three headline areas together. A change that cuts cost but raises the hallucination rate is not an improvement.</p>
+      </section>
+
+      <section id="tracing">
+        <h2>Tracing Every Step</h2>
+        <p>
+          A trace records each step of a request: the retrieval query, the documents returned, the prompt sent, the model response, and the time and tokens each step used. With traces, a bad answer becomes a specific, inspectable event instead of a mystery.
+        </p>
+        <pre class="code" aria-label="Example tracing setup"><code># Environment (names can change between versions)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=&lt;your key&gt;
+LANGSMITH_PROJECT=support-assistant-prod
+
+# Application code
+from langsmith import traceable
+
+@traceable(name="answer_question")
+def answer_question(question: str, user_id: str):
+    docs = retrieve(question)
+    return generate(question, docs)</code></pre>
+        <p class="note">SDK names and settings change between releases. Check the current LangSmith documentation before you build.</p>
+        <ul>
+          <li><strong>Tag every trace</strong> with user tier, feature, model, and prompt version so you can slice results.</li>
+          <li><strong>Redact sensitive data</strong> before it reaches your tracing project.</li>
+          <li><strong>Sample wisely.</strong> Trace everything in staging and a defined share in production.</li>
+        </ul>
+      </section>
+
+      <section id="datasets">
+        <h2>Datasets and Offline Evals</h2>
+        <p>
+          Offline evaluation runs a fixed set of questions through your application and scores the results before release. It is how you compare a new prompt, model, or retriever against the current one fairly.
+        </p>
+        <ol>
+          <li><strong>Collect real examples.</strong> Pull representative questions from traces and support logs.</li>
+          <li><strong>Add reference answers or sources.</strong> Note which documents should be retrieved.</li>
+          <li><strong>Include hard cases.</strong> Add ambiguous questions, missing-evidence questions, and past failures.</li>
+          <li><strong>Score with evaluators.</strong> Combine code checks, model-based judges, and periodic human review.</li>
+          <li><strong>Compare runs side by side.</strong> Look at quality, latency, and cost for every candidate.</li>
+        </ol>
+        <p>
+          Model-based judges are useful but imperfect. Calibrate them against human-labeled samples and recheck them whenever the judge model changes.
+        </p>
+      </section>
+
+      <section id="online">
+        <h2>Online Evaluation</h2>
+        <p>
+          Real traffic reveals problems that a fixed dataset cannot. Score a sample of live traces automatically and feed the worst ones back into your dataset.
+        </p>
+        <ul class="checks">
+          <li>Groundedness checked on a sample of live answers</li>
+          <li>User feedback such as thumbs down linked to the trace</li>
+          <li>Failed and slow traces collected into a review queue</li>
+          <li>Reviewed failures added to the golden dataset</li>
+          <li>Drift watched by re-scoring the same dataset on a schedule</li>
+        </ul>
+      </section>
+
+      <section id="alerts">
+        <h2>Alerts and Budgets</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th scope="col">Signal</th><th scope="col">Alert when</th><th scope="col">Typical response</th></tr>
+            </thead>
+            <tbody>
+              <tr><th scope="row">p95 latency</th><td>It rises beyond your agreed target</td><td>Inspect the slowest step in recent traces</td></tr>
+              <tr><th scope="row">Cost per task</th><td>It climbs faster than usage</td><td>Check prompt length, retries, and model choice</td></tr>
+              <tr><th scope="row">Groundedness</th><td>It falls below your baseline</td><td>Review retrieval and recent prompt changes</td></tr>
+              <tr><th scope="row">Error rate</th><td>Failures or timeouts spike</td><td>Check provider status and fallback behavior</td></tr>
+              <tr><th scope="row">Daily spend</th><td>A team or tenant exceeds its budget</td><td>Throttle, cap, or investigate the source</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Set targets from your own baseline rather than copying numbers from other teams.</p>
+      </section>
+
+      <section id="workflow">
+        <h2>A Debugging Workflow</h2>
+        <ol>
+          <li><strong>Find the trace.</strong> Start from the complaint, the alert, or a low-scored run.</li>
+          <li><strong>Read each step.</strong> Check retrieved documents before blaming the model.</li>
+          <li><strong>Classify the cause.</strong> Retrieval miss, prompt issue, model behavior, or tool failure.</li>
+          <li><strong>Fix one thing.</strong> Change a single variable so the effect is clear.</li>
+          <li><strong>Re-run the dataset.</strong> Confirm quality, latency, and cost before shipping.</li>
+          <li><strong>Add the case.</strong> Put the failure into the dataset so it never returns unnoticed.</li>
+        </ol>
+      </section>
+
+      <section id="faqs">
+        <h2>FAQs</h2>
+
+        <h3>What is LangSmith used for?</h3>
+        <p>It is a platform for tracing, evaluating, and monitoring LLM applications, so teams can see each step of a request and score quality, latency, and cost.</p>
+
+        <h3>How do we measure hallucinations?</h3>
+        <p>Common approaches check whether each claim is supported by the retrieved sources, whether citations are correct, and whether the system declines when evidence is missing. Combine automated checks with human review.</p>
+
+        <h3>Are model-based judges reliable?</h3>
+        <p>They are useful at scale but imperfect. Calibrate them against human-labeled examples and recheck them when the judge model changes.</p>
+
+        <h3>How do we control token costs?</h3>
+        <p>Trace tokens per step, shorten prompts, retrieve fewer and better passages, cache where appropriate, and route simple tasks to smaller models.</p>
+
+        <h3>Should we trace all production traffic?</h3>
+        <p>Not necessarily. Many teams trace a defined sample plus all errors and low-scoring runs, and redact sensitive data first.</p>
+      </section>
+
+      <section id="conclusion">
+        <h2>Conclusion</h2>
+        <p>
+          Production LLM quality is measured, not assumed. Trace every step, keep a golden dataset, score latency, cost, and groundedness together, and let those numbers gate every release. That discipline is what turns a promising demo into a system you can run with confidence.
+        </p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; 2026 LLM Observability Notes. All rights reserved.</p>
+    </div>
+  </footer>
+</body>
+</html>
