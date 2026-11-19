@@ -80,13 +80,3 @@ Set targets from your own baseline rather than copying numbers from other teams.
 ## Get Started
 
 Ready to put numbers behind your LLM application? Visit [zignuts.com](https://zignuts.com/) to speak with the team.
-
-## Publish with GitHub Pages
-
-1. Add `langchain-langsmith-production-pipeline.jpg` to the repository root.
-2. Go to **Settings > Pages**, choose the `main` branch and the `/ (root)` folder, then save.
-3. The site will be available at `https://harshp-zigs.github.io/langchain-enterprise-agent-orchestrator/`.
-
-## Topics
-
-`langsmith` `langchain` `llm-evaluation` `llm-observability` `token-cost` `latency` `hallucination-detection`
